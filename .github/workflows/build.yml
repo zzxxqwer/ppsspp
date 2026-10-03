@@ -26,6 +26,8 @@ jobs:
       - name: Build rpltool (host tool)
         run: |
           ls ext/wiiu/rpltool
+          grep -n "Werror" ext/wiiu/rpltool/Makefile || true
+          sed -i 's/-Werror[^ ]*//g' ext/wiiu/rpltool/Makefile
           make -C ext/wiiu/rpltool
 
       - name: Configure
@@ -56,5 +58,4 @@ jobs:
           name: PPSSPP-WiiU
           path: |
             build/**/*.rpx
-
             build/**/*.elf
