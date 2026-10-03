@@ -6,25 +6,31 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 오래된 devkitPPC 이미지 태그들 (존재 여부는 Docker Hub devkitpro/devkitppc 태그 목록에서 확인)
-        image_tag: ["20180811", "20190212", "20190524", "20200528"]
-    container:
-      image: devkitpro/devkitppc:${{ matrix.image_tag }}
+    env:
+      DEVKITPRO: /opt/devkitpro
+      DEVKITPPC: /opt/devkitpro/devkitPPC
     steps:
-      - name: Install build tools
-        run: |
-          (apt-get update || true)
-          apt-get install -y cmake build-essential git python3 zlib1g-dev pkg-config ccache || true
-          cmake --version
-          git --version
-
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential git python3 zlib1g-dev pkg-config ccache
+
+      # 옛 이미지는 Debian stretch라 apt/Node가 동작하지 않으므로,
+      # 컨테이너로 실행하지 않고 툴체인(/opt/devkitpro)만 이미지에서 꺼내 호스트에서 사용한다.
+      - name: Extract old devkitPPC from docker image
+        run: |
+          docker pull devkitpro/devkitppc:20190212
+          id=$(docker create devkitpro/devkitppc:20190212)
+          sudo docker cp "$id":/opt/devkitpro /opt/
+          docker rm "$id"
+          sudo chmod -R a+rX /opt/devkitpro
+          ls /opt/devkitpro
+          /opt/devkitpro/devkitPPC/bin/powerpc-eabi-gcc --version
 
       - name: Build rpltool (host tool)
         run: |
@@ -33,15 +39,11 @@ jobs:
 
       - name: Configure
         run: |
-          export DEVKITPRO=/opt/devkitpro
-          export DEVKITPPC=/opt/devkitpro/devkitPPC
           mkdir -p build && cd build
           cmake -DWIIU=ON ..
 
       - name: Compile
         run: |
-          export DEVKITPRO=/opt/devkitpro
-          export DEVKITPPC=/opt/devkitpro/devkitPPC
           cd build
           make -j$(nproc) 2>&1 | tee ../build.log
 
@@ -49,14 +51,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-${{ matrix.image_tag }}
+          name: build-log
           path: build.log
           if-no-files-found: ignore
 
       - name: Upload rpx
         uses: actions/upload-artifact@v4
         with:
-          name: PPSSPP-WiiU-${{ matrix.image_tag }}
+          name: PPSSPP-WiiU
           path: |
             build/**/*.rpx
 
