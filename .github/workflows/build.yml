@@ -16,19 +16,12 @@ jobs:
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install -y cmake build-essential git python3 zlib1g-dev pkg-config
+          apt-get install -y cmake build-essential git python3 zlib1g-dev pkg-config ccache
 
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Update ffmpeg submodule (per README)
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          cd ffmpeg
-          git fetch origin master
-          git checkout -f FETCH_HEAD
 
       - name: Build rpltool (host tool)
         run: |
