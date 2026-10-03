@@ -2,21 +2,24 @@ name: Build PPSSPP Wii U
 
 on:
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "devkitpro/devkitppc 도커 이미지 태그 (예: latest, 20190212)"
-        default: "latest"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 오래된 devkitPPC 이미지 태그들 (존재 여부는 Docker Hub devkitpro/devkitppc 태그 목록에서 확인)
+        image_tag: ["20180811", "20190212", "20190524", "20200528"]
     container:
-      image: devkitpro/devkitppc:${{ github.event.inputs.image_tag || 'latest' }}
+      image: devkitpro/devkitppc:${{ matrix.image_tag }}
     steps:
       - name: Install build tools
         run: |
-          apt-get update
-          apt-get install -y cmake build-essential git python3 zlib1g-dev pkg-config ccache
+          (apt-get update || true)
+          apt-get install -y cmake build-essential git python3 zlib1g-dev pkg-config ccache || true
+          cmake --version
+          git --version
 
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
@@ -25,8 +28,6 @@ jobs:
 
       - name: Build rpltool (host tool)
         run: |
-          ls ext/wiiu/rpltool
-          grep -n "Werror" ext/wiiu/rpltool/Makefile || true
           sed -i 's/-Werror[^ ]*//g' ext/wiiu/rpltool/Makefile
           make -C ext/wiiu/rpltool
 
@@ -48,14 +49,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
+          name: build-log-${{ matrix.image_tag }}
           path: build.log
           if-no-files-found: ignore
 
       - name: Upload rpx
         uses: actions/upload-artifact@v4
         with:
-          name: PPSSPP-WiiU
+          name: PPSSPP-WiiU-${{ matrix.image_tag }}
           path: |
             build/**/*.rpx
+
             build/**/*.elf
