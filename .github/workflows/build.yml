@@ -37,6 +37,12 @@ jobs:
           sed -i 's/-Werror[^ ]*//g' ext/wiiu/rpltool/Makefile
           make -C ext/wiiu/rpltool
 
+      - name: Patch toolchain (avoid SDA relocation overflow at link)
+        run: |
+          grep -n "msdata" cmake/Toolchains/wiiu.cmake
+          sed -i 's/-msdata=eabi/-msdata=none/' cmake/Toolchains/wiiu.cmake
+          grep -n "msdata" cmake/Toolchains/wiiu.cmake
+
       - name: Configure
         run: |
           mkdir -p build && cd build
