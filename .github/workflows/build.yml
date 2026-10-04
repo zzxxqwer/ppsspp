@@ -18,7 +18,7 @@ jobs:
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential git python3 zlib1g-dev pkg-config ccache
+          sudo apt-get install -y cmake build-essential git python3 zlib1g-dev pkg-config ccache autoconf automake libtool libfreeimage-dev
 
       # 옛 이미지는 Debian stretch라 apt/Node가 동작하지 않으므로,
       # 컨테이너로 실행하지 않고 툴체인(/opt/devkitpro)만 이미지에서 꺼내 호스트에서 사용한다.
@@ -37,6 +37,48 @@ jobs:
           sed -i 's/-Werror[^ ]*//g' ext/wiiu/rpltool/Makefile
           make -C ext/wiiu/rpltool
 
+      - name: Patch entry.c (mount Wii U WFS-formatted USB as usb:/)
+        run: |
+          python3 - <<'PY'
+          p = "ext/wiiu/entry.c"
+          s = open(p).read()
+          if "usbWfsFsaFd" in s:
+              raise SystemExit("already patched")
+          def rep(old, new):
+              global s
+              assert old in s, "pattern not found: " + old[:40]
+              s = s.replace(old, new, 1)
+          rep("#include <fat.h>\n#include <iosuhax.h>\n",
+              "#include <dirent.h>\n#include <fat.h>\n#include <iosuhax.h>\n#include <iosuhax_devoptab.h>\n")
+          rep("static int iosuhaxMount = 0;\n",
+              "static int iosuhaxMount = 0;\nstatic int usbWfsFsaFd = -1;\n")
+          rep("\t\t\tfatInitDefault();\n\t\t\treturn;\n",
+              "\t\t\tfatInitDefault();\n"
+              "\t\t\t{\n"
+              "\t\t\t\tDIR *usbdir = opendir(\"usb:/\");\n"
+              "\t\t\t\tif (usbdir) {\n"
+              "\t\t\t\t\tclosedir(usbdir);\n"
+              "\t\t\t\t} else {\n"
+              "\t\t\t\t\tusbWfsFsaFd = IOSUHAX_FSA_Open();\n"
+              "\t\t\t\t\tif (usbWfsFsaFd >= 0 && mount_fs(\"usb\", usbWfsFsaFd, NULL, \"/vol/storage_usb01\") < 0) {\n"
+              "\t\t\t\t\t\tIOSUHAX_FSA_Close(usbWfsFsaFd);\n"
+              "\t\t\t\t\t\tusbWfsFsaFd = -1;\n"
+              "\t\t\t\t\t}\n"
+              "\t\t\t\t}\n"
+              "\t\t\t}\n"
+              "\t\t\treturn;\n")
+          rep("\tif (iosuhaxMount) {\n\t\tfatUnmount(\"sd:\");\n",
+              "\tif (iosuhaxMount) {\n"
+              "\t\tif (usbWfsFsaFd >= 0) {\n"
+              "\t\t\tunmount_fs(\"usb\");\n"
+              "\t\t\tIOSUHAX_FSA_Close(usbWfsFsaFd);\n"
+              "\t\t\tusbWfsFsaFd = -1;\n"
+              "\t\t}\n"
+              "\t\tfatUnmount(\"sd:\");\n")
+          open(p, "w").write(s)
+          PY
+          grep -n "usbWfsFsaFd" ext/wiiu/entry.c
+
       - name: Patch toolchain (avoid SDA relocation overflow at link)
         run: |
           grep -n "msdata" cmake/Toolchains/wiiu.cmake
@@ -53,6 +95,20 @@ jobs:
           cd build
           make -j$(nproc) 2>&1 | tee ../build.log
 
+      - name: Package Aroma .wuhb
+        run: |
+          git clone --depth 1 https://github.com/devkitPro/wut-tools.git /tmp/wut-tools
+          cd /tmp/wut-tools
+          git submodule update --init --depth 1
+          ./autogen.sh && ./configure && make -j$(nproc) wuhbtool
+          cd "$GITHUB_WORKSPACE"
+          RPX=$(find build -name '*.rpx' | head -1)
+          echo "rpx: $RPX"
+          mkdir -p dist
+          /tmp/wut-tools/wuhbtool "$RPX" dist/PPSSPP.wuhb --name="PPSSPP" --short-name="PPSSPP" --author="ppsspp-wiiu"
+          cp "$RPX" dist/
+          ls -la dist
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
@@ -66,6 +122,6 @@ jobs:
         with:
           name: PPSSPP-WiiU
           path: |
-            build/**/*.rpx
+            dist/PPSSPP.wuhb
 
-            build/**/*.elf
+            dist/*.rpx
