@@ -79,6 +79,66 @@ jobs:
           PY
           grep -n "usbWfsFsaFd" ext/wiiu/entry.c
 
+      - name: Debug patch (log to sd:/ppsspp/log.txt + stage markers)
+        run: |
+          python3 - <<'PY'
+          import re
+          # ---- logger.c: also write to sd:/ppsspp/log.txt ----
+          p = "ext/wiiu/logger.c"
+          s = open(p).read()
+          if "file_log" not in s:
+              helper = '''
+          /* DEBUG: mirror log to sd:/ppsspp/log.txt (buffered until SD is mounted) */
+          static char early_buf[16384];
+          static size_t early_len = 0;
+          static int log_file_started = 0;
+          static void file_log(const char *ptr, size_t len) {
+          \tFILE *f = fopen("sd:/ppsspp/log.txt", log_file_started ? "ab" : "wb");
+          \tif (!f) {
+          \t\tif (early_len + len <= sizeof(early_buf)) {
+          \t\t\tmemcpy(early_buf + early_len, ptr, len);
+          \t\t\tearly_len += len;
+          \t\t}
+          \t\treturn;
+          \t}
+          \tlog_file_started = 1;
+          \tif (early_len) {
+          \t\tfwrite(early_buf, 1, early_len, f);
+          \t\tearly_len = 0;
+          \t}
+          \tfwrite(ptr, 1, len, f);
+          \tfclose(f);
+          }
+
+          '''
+              marker = "static int wiiu_log_socket = -1;"
+              assert marker in s
+              s = s.replace(marker, marker + "\n" + helper, 1)
+              old = "static ssize_t wiiu_log_write(struct _reent *r, void *fd, const char *ptr, size_t len) {\n\tOSLockMutex(&wiiu_log_mutex);\n"
+              assert old in s
+              s = s.replace(old, old + "\tfile_log(ptr, len);\n", 1)
+              old2 = "void net_print_exp(const char *str) {\n\tOSLockMutex(&wiiu_log_mutex);\n"
+              assert old2 in s
+              s = s.replace(old2, old2 + "\tfile_log(str, strlen(str));\n", 1)
+              open(p, "w").write(s)
+
+          # ---- WiiUMain.cpp: stage markers ----
+          p = "WiiU/WiiUMain.cpp"
+          s = open(p).read()
+          if "STAGE:" not in s:
+              def rep(old, new):
+                  global s
+                  assert old in s, old[:50]
+                  s = s.replace(old, new, 1)
+              rep("\thost = new WiiUHost();\n", "\tprintf(\"STAGE: main start\\n\");\n\thost = new WiiUHost();\n")
+              rep("\tNativeInit(sizeof(argv_)", "\tprintf(\"STAGE: before NativeInit\\n\");\n\tNativeInit(sizeof(argv_)")
+              rep("\thost->InitGraphics(&error_string, &ctx);\n", "\tprintf(\"STAGE: after NativeInit, before InitGraphics\\n\");\n\thost->InitGraphics(&error_string, &ctx);\n\tprintf(\"STAGE: after InitGraphics (%s)\\n\", error_string.c_str());\n")
+              rep("\tNativeInitGraphics(ctx);\n", "\tNativeInitGraphics(ctx);\n\tprintf(\"STAGE: after NativeInitGraphics\\n\");\n")
+              rep("\thost->InitSound();\n", "\thost->InitSound();\n\tprintf(\"STAGE: entering main loop\\n\");\n")
+              open(p, "w").write(s)
+          print("patched")
+          PY
+
       - name: Patch toolchain (avoid SDA relocation overflow at link)
         run: |
           grep -n "msdata" cmake/Toolchains/wiiu.cmake
@@ -109,6 +169,14 @@ jobs:
           cp "$RPX" dist/
           ls -la dist
 
+      - name: Collect SD card layout (assets are required at runtime)
+        run: |
+          mkdir -p dist/sdcard/ppsspp dist/sdcard/wiiu/apps/ppsspp
+          cp -r assets dist/sdcard/ppsspp/assets
+          cp dist/*.rpx dist/sdcard/wiiu/apps/ppsspp/
+          cp dist/PPSSPP.wuhb dist/sdcard/wiiu/apps/ || true
+          find dist/sdcard -maxdepth 4 | head -40
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
@@ -121,7 +189,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PPSSPP-WiiU
-          path: |
-            dist/PPSSPP.wuhb
 
-            dist/*.rpx
+          path: dist/sdcard
